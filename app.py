@@ -8,7 +8,7 @@ from streamlit_gsheets import GSheetsConnection
 
 st.set_page_config(page_title="לוח מתכונים", page_icon="🍳", layout="wide")
 
-# --- מנגנון ה-AI לחילוץ הנתונים (עם איתור מודל אוטומטי) ---
+# --- מנגנון ה-AI לחילוץ הנתונים (מנגנון חסין תקלות לדילוג על מודלים חסומים) ---
 def extract_recipe_data(url, category):
     try:
         # 1. משיכת תוכן ה-HTML של המתכון
@@ -21,25 +21,15 @@ def extract_recipe_data(url, category):
         images = [img.get('src') for img in soup.find_all('img') if img.get('src') and img.get('src').startswith('http')]
         images_list = "\n".join(images[:15])
         
-        # 2. חיבור ל-Gemini ואיתור המודל
+        # 2. חיבור ל-Gemini
         genai.configure(api_key=st.secrets["AI_API_KEY"])
         
-        # מושך את רשימת המודלים שפתוחים ספציפית למפתח שלך
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         
         if not available_models:
-            st.error("לא נמצאו מודלים זמינים בחשבון שלך. ודא ש-Generative Language API מופעל.")
+            st.error("לא נמצאו מודלים זמינים בחשבון.")
             return None
             
-        # מנסה למצוא את המודלים המוכרים, ואם לא - לוקח את הראשון שזמין
-        chosen_model = available_models[0] 
-        for m in ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro', 'models/gemini-1.0-pro']:
-            if m in available_models:
-                chosen_model = m
-                break
-                
-        model = genai.GenerativeModel(chosen_model)
-        
         prompt = f'''
         You are an advanced recipe data extractor. I will provide text from a recipe website and a list of image URLs found on the page.
         Extract the recipe details and return ONLY a valid JSON object. Do not use Markdown formatting (like ```json), just return the raw JSON string.
@@ -58,19 +48,46 @@ def extract_recipe_data(url, category):
         {images_list}
         '''
         
-        response = model.generate_content(prompt)
-        res_text = response.text.strip()
+        data = None
+        last_error = None
         
-        if res_text.startswith("```json"):
-            res_text = res_text[7:-3].strip()
-        elif res_text.startswith("```"):
-            res_text = res_text[3:-3].strip()
+        # אנחנו מגדירים עדיפות למודלים העדכניים של זמננו
+        preferred_models = ['models/gemini-3.1-pro', 'models/gemini-3.1-flash', 'models/gemini-3.0-pro', 'models/gemini-3.0-flash']
+        
+        # מסדרים את הרשימה: קודם המועדפים (אם הם זמינים לחשבון שלך), ואז שאר המודלים שגוגל החזירה
+        models_to_try = [m for m in preferred_models if m in available_models] + [m for m in available_models if m not in preferred_models]
+        
+        # הלולאה החכמה: רצה על המודלים עד שאחד מהם מבצע את העבודה בהצלחה
+        for model_name in models_to_try:
+            try:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(prompt)
+                res_text = response.text.strip()
+                
+                if res_text.startswith("```json"):
+                    res_text = res_text[7:-3].strip()
+                elif res_text.startswith("```"):
+                    res_text = res_text[3:-3].strip()
+                    
+                data = json.loads(res_text)
+                
+                # אם הגענו לכאן, המודל חילץ את הנתונים בהצלחה - אנחנו יוצאים מהלולאה!
+                break 
+                
+            except Exception as e:
+                # אם המודל סגור, נכשל או ישן - שומרים את השגיאה וממשיכים למודל הבא
+                last_error = str(e)
+                continue
+                
+        # אם עברנו על כל המודלים ואף אחד לא עבד
+        if data is None:
+            st.error(f"אף מודל לא הצליח להשלים את הבקשה. השגיאה האחרונה שניסינו: {last_error}")
+            return None
             
-        data = json.loads(res_text)
         return data
         
     except Exception as e:
-        st.error(f"שגיאה בחילוץ הנתונים: {e}")
+        st.error(f"שגיאה כללית: {e}")
         return None
 
 st.title("🍳 לוח המתכונים")
