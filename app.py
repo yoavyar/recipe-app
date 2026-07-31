@@ -8,8 +8,10 @@ from streamlit_gsheets import GSheetsConnection
 
 st.set_page_config(page_title="לוח מתכונים", page_icon="🍳", layout="wide")
 
+# --- מנגנון ה-AI לחילוץ הנתונים (עם איתור מודל אוטומטי) ---
 def extract_recipe_data(url, category):
     try:
+        # 1. משיכת תוכן ה-HTML של המתכון
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         res = requests.get(url, headers=headers, timeout=10)
         res.raise_for_status()
@@ -19,8 +21,24 @@ def extract_recipe_data(url, category):
         images = [img.get('src') for img in soup.find_all('img') if img.get('src') and img.get('src').startswith('http')]
         images_list = "\n".join(images[:15])
         
+        # 2. חיבור ל-Gemini ואיתור המודל
         genai.configure(api_key=st.secrets["AI_API_KEY"])
-        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+        
+        # מושך את רשימת המודלים שפתוחים ספציפית למפתח שלך
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        
+        if not available_models:
+            st.error("לא נמצאו מודלים זמינים בחשבון שלך. ודא ש-Generative Language API מופעל.")
+            return None
+            
+        # מנסה למצוא את המודלים המוכרים, ואם לא - לוקח את הראשון שזמין
+        chosen_model = available_models[0] 
+        for m in ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro', 'models/gemini-1.0-pro']:
+            if m in available_models:
+                chosen_model = m
+                break
+                
+        model = genai.GenerativeModel(chosen_model)
         
         prompt = f'''
         You are an advanced recipe data extractor. I will provide text from a recipe website and a list of image URLs found on the page.
