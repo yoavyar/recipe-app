@@ -12,35 +12,26 @@ st.set_page_config(page_title="לוח מתכונים", page_icon="🍳", layout=
 # --- עיצוב מותאם לעברית (RTL) ---
 st.markdown("""
 <style>
-    /* הפיכת כיוון האפליקציה מימין לשמאל */
     .stApp, .block-container {
         direction: rtl;
         text-align: right;
     }
-    
-    /* יישור כללי של טקסטים, כותרות ותוויות לימין */
     p, div, input, label, h1, h2, h3, h4, h5, h6, span {
         text-align: right;
     }
-    
-    /* סידור חלוניות המצרכים (Expanders) */
     .streamlit-expanderHeader {
         direction: rtl;
+        font-size: 1.1rem;
+        font-weight: bold;
     }
-    
-    /* יישור שדות קלט (לינקים) ותפריטים נפתחים (קטגוריות) */
     div[data-baseweb="input"] input, div[data-baseweb="select"] div {
         direction: rtl;
         text-align: right;
     }
-    
-    /* סידור הטאבים העליונים שיתחילו מימין */
     div[data-baseweb="tab-list"] {
         justify-content: flex-start;
         direction: rtl;
     }
-    
-    /* יישור חלון הפופ-אפ של המחיקה (Modal) */
     div[role="dialog"] {
         direction: rtl;
         text-align: right;
@@ -57,11 +48,9 @@ def confirm_delete(index):
     st.warning("האם ברצונך למחוק את המתכון מהלוח?")
     cols = st.columns(2)
     with cols[0]:
-        # כפתור ביטול
         if st.button("בטל", use_container_width=True):
             st.rerun()
     with cols[1]:
-        # כפתור מחיקה בולט
         if st.button("מחק", type="primary", use_container_width=True):
             fresh_df = conn.read(ttl=0)
             fresh_df = fresh_df.drop(index)
@@ -162,11 +151,14 @@ st.title("🍳 לוח המתכונים")
 
 tab_board, tab_add = st.tabs(["📋 לוח מתכונים", "➕ הוספת מתכון חדש"])
 
+# הרשימה החדשה של הקטגוריות
+categories_list = ["עוף", "בשר", "תוספות", "מרק", "סלטים", "קינוחים"]
+
 with tab_add:
     st.header("הזנת מתכון חדש")
     with st.form("add_recipe"):
         url_input = st.text_input("הכנס לינק למתכון:")
-        category_input = st.selectbox("קטגוריה:", ["בשר", "עוף", "דגים", "חלבי", "צמחוני", "טבעוני", "מאפים", "קינוחים", "שונות"])
+        category_input = st.selectbox("קטגוריה:", categories_list)
         submit = st.form_submit_button("חלץ ושמור מתכון")
         
         if submit and url_input:
@@ -207,34 +199,35 @@ with tab_board:
             categories = [c for c in df['Category'].unique() if c != ""]
             
             for cat in categories:
-                st.subheader(cat)
-                cat_df = df[df['Category'] == cat]
-                
-                cols = st.columns(4)
-                for i, (index, row) in enumerate(cat_df.iterrows()):
-                    col = cols[i % 4]
-                    with col:
-                        with st.container(border=True):
-                            # תמונה
-                            img_url = str(row.get('Image_URL', ''))
-                            if img_url and img_url.startswith('http'):
-                                st.image(img_url, use_column_width=True)
-                            
-                            # כותרת
-                            recipe_name = row.get('Recipe_Name', '')
-                            st.markdown(f"**{recipe_name if recipe_name else 'מתכון ללא שם'}**")
-                            
-                            # מצרכים
-                            with st.expander("מצרכים"):
-                                st.text(row.get('Ingredients', 'אין מצרכים זמינים'))
-                            
-                            # חלוקה לכפתור מחיקה וכפתור לינק
-                            action_cols = st.columns([1, 2])
-                            with action_cols[0]:
-                                if st.button("🗑️", key=f"del_{index}", help="מחק מתכון זה"):
-                                    confirm_delete(index)
-                            with action_cols[1]:
-                                st.markdown(f"[🔗 למתכון המלא]({row.get('Recipe_URL', '#')})")
+                # הפיכת הקטגוריה לאקורדיון סגור כברירת מחדל
+                with st.expander(f"🍽️ קטגוריה: {cat}", expanded=False):
+                    cat_df = df[df['Category'] == cat]
+                    
+                    cols = st.columns(4)
+                    for i, (index, row) in enumerate(cat_df.iterrows()):
+                        col = cols[i % 4]
+                        with col:
+                            with st.container(border=True):
+                                # תמונה
+                                img_url = str(row.get('Image_URL', ''))
+                                if img_url and img_url.startswith('http'):
+                                    st.image(img_url, use_column_width=True)
                                 
+                                # כותרת
+                                recipe_name = row.get('Recipe_Name', '')
+                                st.markdown(f"**{recipe_name if recipe_name else 'מתכון ללא שם'}**")
+                                
+                                # מצרכים
+                                with st.expander("מצרכים"):
+                                    st.text(row.get('Ingredients', 'אין מצרכים זמינים'))
+                                
+                                # כפתורים
+                                action_cols = st.columns([1, 2])
+                                with action_cols[0]:
+                                    if st.button("🗑️", key=f"del_{index}", help="מחק מתכון זה"):
+                                        confirm_delete(index)
+                                with action_cols[1]:
+                                    st.markdown(f"[🔗 למתכון המלא]({row.get('Recipe_URL', '#')})")
+                                    
     except Exception as e:
         st.error(f"שגיאה בקריאת הנתונים מ-Google Sheets: {e}")
