@@ -9,7 +9,46 @@ from streamlit_gsheets import GSheetsConnection
 
 st.set_page_config(page_title="לוח מתכונים", page_icon="🍳", layout="wide")
 
-# יצירת אובייקט חיבור ל-Sheets (הועבר למעלה כדי שיהיה זמין לכל הפונקציות)
+# --- עיצוב מותאם לעברית (RTL) ---
+st.markdown("""
+<style>
+    /* הפיכת כיוון האפליקציה מימין לשמאל */
+    .stApp, .block-container {
+        direction: rtl;
+        text-align: right;
+    }
+    
+    /* יישור כללי של טקסטים, כותרות ותוויות לימין */
+    p, div, input, label, h1, h2, h3, h4, h5, h6, span {
+        text-align: right;
+    }
+    
+    /* סידור חלוניות המצרכים (Expanders) */
+    .streamlit-expanderHeader {
+        direction: rtl;
+    }
+    
+    /* יישור שדות קלט (לינקים) ותפריטים נפתחים (קטגוריות) */
+    div[data-baseweb="input"] input, div[data-baseweb="select"] div {
+        direction: rtl;
+        text-align: right;
+    }
+    
+    /* סידור הטאבים העליונים שיתחילו מימין */
+    div[data-baseweb="tab-list"] {
+        justify-content: flex-start;
+        direction: rtl;
+    }
+    
+    /* יישור חלון הפופ-אפ של המחיקה (Modal) */
+    div[role="dialog"] {
+        direction: rtl;
+        text-align: right;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# יצירת אובייקט חיבור ל-Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 # --- חלון פופ-אפ לווידוא מחיקה ---
@@ -18,6 +57,10 @@ def confirm_delete(index):
     st.warning("האם ברצונך למחוק את המתכון מהלוח?")
     cols = st.columns(2)
     with cols[0]:
+        # כפתור ביטול
+        if st.button("בטל", use_container_width=True):
+            st.rerun()
+    with cols[1]:
         # כפתור מחיקה בולט
         if st.button("מחק", type="primary", use_container_width=True):
             fresh_df = conn.read(ttl=0)
@@ -25,15 +68,10 @@ def confirm_delete(index):
             conn.update(data=fresh_df)
             st.cache_data.clear()
             st.rerun()
-    with cols[1]:
-        # כפתור ביטול
-        if st.button("בטל", use_container_width=True):
-            st.rerun()
 
-# --- מנגנון ה-AI לחילוץ הנתונים (משודרג לאתרים מורכבים כמו Mako) ---
+# --- מנגנון ה-AI לחילוץ הנתונים ---
 def extract_recipe_data(url, category):
     try:
-        # הוספת כותרות כדי לדמות דפדפן אמיתי
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7"
@@ -44,7 +82,6 @@ def extract_recipe_data(url, category):
         
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # חילוץ כותרת ותמונה מתגיות המטא של האתר (עוקף חסימות טקסט)
         meta_title = soup.find('meta', property='og:title')
         meta_title = meta_title['content'] if meta_title else ""
         
@@ -102,14 +139,12 @@ def extract_recipe_data(url, category):
                 response = model.generate_content(prompt)
                 res_text = response.text.strip()
                 
-                # שימוש ב-Regex כדי לתפוס את ה-JSON בוודאות גם אם המודל הוסיף טקסט מסביב
                 json_match = re.search(r'\{.*\}', res_text, re.DOTALL)
                 if json_match:
                     res_text = json_match.group(0)
                     
                 data = json.loads(res_text)
                 
-                # אם קיבלנו שם מתכון - החילוץ הצליח ויוצאים מהלולאה
                 if data.get("Recipe_Name"):
                     break 
                     
@@ -164,7 +199,6 @@ with tab_add:
 with tab_board:
     st.header("המתכונים שלי")
     try:
-        # קריאת הנתונים ומילוי שדות ריקים כדי להימנע מ-nan
         df = conn.read(ttl=0).fillna("")
         
         if df.empty or len(df.columns) == 0:
@@ -194,14 +228,13 @@ with tab_board:
                             with st.expander("מצרכים"):
                                 st.text(row.get('Ingredients', 'אין מצרכים זמינים'))
                             
-                            # חלוקה לכפתור לינק וכפתור מחיקה
-                            action_cols = st.columns([2, 1])
+                            # חלוקה לכפתור מחיקה וכפתור לינק
+                            action_cols = st.columns([1, 2])
                             with action_cols[0]:
-                                st.markdown(f"[🔗 למתכון המלא]({row.get('Recipe_URL', '#')})")
-                            with action_cols[1]:
                                 if st.button("🗑️", key=f"del_{index}", help="מחק מתכון זה"):
-                                    # קריאה לחלון הווידוא (Modal) שהגדרנו למעלה
                                     confirm_delete(index)
-                                    
+                            with action_cols[1]:
+                                st.markdown(f"[🔗 למתכון המלא]({row.get('Recipe_URL', '#')})")
+                                
     except Exception as e:
         st.error(f"שגיאה בקריאת הנתונים מ-Google Sheets: {e}")
