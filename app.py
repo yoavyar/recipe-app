@@ -9,6 +9,7 @@ from streamlit_gsheets import GSheetsConnection
 st.set_page_config(page_title="לוח מתכונים", page_icon="🍳", layout="wide")
 
 # --- מנגנון ה-AI לחילוץ הנתונים (מעודכן לגישת REST API ישירה) ---
+# --- מנגנון ה-AI לחילוץ הנתונים (מעודכן לגישת REST עם Bearer Token) ---
 def extract_recipe_data(url, category):
     try:
         # 1. משיכת תוכן ה-HTML של המתכון
@@ -20,13 +21,15 @@ def extract_recipe_data(url, category):
         # חילוץ הטקסט הקיים בעמוד
         text_content = soup.get_text(separator='\n', strip=True)
         
-        # חילוץ תמונות (ניתן למודל לבחור את התמונה הרלוונטית ביותר)
+        # חילוץ תמונות 
         images = [img.get('src') for img in soup.find_all('img') if img.get('src') and img.get('src').startswith('http')]
         images_list = "\n".join(images[:15])
         
-        # 2. קריאה ישירה ל-API של Gemini (עוקף את ספריית הפייתון)
+        # 2. קריאה ישירה ל-API של Gemini
         api_key = st.secrets["AI_API_KEY"]
-        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+        
+        # הכתובת הנקייה ללא ?key=
+        api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
         
         prompt = f'''
         You are an advanced recipe data extractor. I will provide text from a recipe website and a list of image URLs found on the page.
@@ -49,12 +52,18 @@ def extract_recipe_data(url, category):
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
-                "response_mime_type": "application/json" # מכריח את המודל להחזיר JSON חוקי ונקי
+                "response_mime_type": "application/json"
             }
         }
         
+        # העברת המפתח ל-Header התקני
+        api_headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {api_key}'
+        }
+        
         # שליחת הבקשה
-        response = requests.post(api_url, headers={'Content-Type': 'application/json'}, json=payload)
+        response = requests.post(api_url, headers=api_headers, json=payload)
         
         if not response.ok:
             st.error(f"שגיאת שרת מול מודל ה-AI: {response.status_code} - {response.text}")
