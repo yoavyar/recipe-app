@@ -20,7 +20,7 @@ def extract_recipe_data(url, category):
         images_list = "\n".join(images[:15])
         
         genai.configure(api_key=st.secrets["AI_API_KEY"])
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
         
         prompt = f'''
         You are an advanced recipe data extractor. I will provide text from a recipe website and a list of image URLs found on the page.
