@@ -2,14 +2,13 @@ import streamlit as st
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-import google.generativeai as genai
 import json
 from streamlit_gsheets import GSheetsConnection
 
 # הגדרות תצוגה
 st.set_page_config(page_title="לוח מתכונים", page_icon="🍳", layout="wide")
 
-# --- מנגנון ה-AI לחילוץ הנתונים ---
+# --- מנגנון ה-AI לחילוץ הנתונים (מעודכן לגישת REST API ישירה) ---
 def extract_recipe_data(url, category):
     try:
         # 1. משיכת תוכן ה-HTML של המתכון
@@ -25,13 +24,13 @@ def extract_recipe_data(url, category):
         images = [img.get('src') for img in soup.find_all('img') if img.get('src') and img.get('src').startswith('http')]
         images_list = "\n".join(images[:15])
         
-        # 2. קריאה ל-Gemini
-        genai.configure(api_key=st.secrets["AI_API_KEY"])
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # 2. קריאה ישירה ל-API של Gemini (עוקף את ספריית הפייתון)
+        api_key = st.secrets["AI_API_KEY"]
+        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
         
         prompt = f'''
         You are an advanced recipe data extractor. I will provide text from a recipe website and a list of image URLs found on the page.
-        Extract the recipe details and return ONLY a valid JSON object. Do not use Markdown formatting (like ```json), just return the raw JSON string.
+        Extract the recipe details.
         
         Required JSON structure:
         {{
@@ -47,15 +46,23 @@ def extract_recipe_data(url, category):
         {images_list}
         '''
         
-        response = model.generate_content(prompt)
-        res_text = response.text.strip()
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "response_mime_type": "application/json" # מכריח את המודל להחזיר JSON חוקי ונקי
+            }
+        }
         
-        # ניקוי שאריות markdown אם המודל מתעקש
-        if res_text.startswith("```json"):
-            res_text = res_text[7:-3].strip()
-        elif res_text.startswith("```"):
-            res_text = res_text[3:-3].strip()
+        # שליחת הבקשה
+        response = requests.post(api_url, headers={'Content-Type': 'application/json'}, json=payload)
+        
+        if not response.ok:
+            st.error(f"שגיאת שרת מול מודל ה-AI: {response.status_code} - {response.text}")
+            return None
             
+        res_data = response.json()
+        res_text = res_data['candidates'][0]['content']['parts'][0]['text']
+        
         data = json.loads(res_text)
         return data
         
@@ -86,7 +93,7 @@ with tab_add:
                 
                 if ai_data:
                     try:
-                        # קריאת כלל הנתונים הקיימים (ttl=0 מונע קאש כדי לקבל את המידע העדכני ביותר)
+                        # קריאת כלל הנתונים הקיימים (ttl=0 מונע קאש)
                         df = conn.read(ttl=0)
                         
                         # יצירת שורה חדשה
@@ -106,7 +113,7 @@ with tab_add:
                         
                         conn.update(data=updated_df)
                         
-                        # ניקוי Cache של Streamlit להתרעננות מיידית
+                        # ניקוי Cache של Streamlit
                         st.cache_data.clear()
                         st.success(f"המתכון '{ai_data.get('Recipe_Name', '')}' נוסף בהצלחה לגיליון!")
                     except Exception as e:
@@ -142,7 +149,6 @@ with tab_board:
                             
                             # מצרכים (תחת Expander כדי לא להעמיס על התצוגה)
                             with st.expander("מצרכים"):
-                                # מאפשר תצוגת שורות נוחה בהנחה שיש ירידות שורה
                                 st.text(row.get('Ingredients', ''))
                             
                             # לינק למקור
