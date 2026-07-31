@@ -4,32 +4,60 @@ import requests
 from bs4 import BeautifulSoup
 import google.generativeai as genai
 import json
+import re
 from streamlit_gsheets import GSheetsConnection
 
 st.set_page_config(page_title="לוח מתכונים", page_icon="🍳", layout="wide")
 
+# יצירת אובייקט חיבור ל-Sheets (הועבר למעלה כדי שיהיה זמין לכל הפונקציות)
+conn = st.connection("gsheets", type=GSheetsConnection)
+
+# --- חלון פופ-אפ לווידוא מחיקה ---
+@st.dialog("מחיקת מתכון")
+def confirm_delete(index):
+    st.warning("האם ברצונך למחוק את המתכון מהלוח?")
+    cols = st.columns(2)
+    with cols[0]:
+        # כפתור מחיקה בולט
+        if st.button("מחק", type="primary", use_container_width=True):
+            fresh_df = conn.read(ttl=0)
+            fresh_df = fresh_df.drop(index)
+            conn.update(data=fresh_df)
+            st.cache_data.clear()
+            st.rerun()
+    with cols[1]:
+        # כפתור ביטול
+        if st.button("בטל", use_container_width=True):
+            st.rerun()
+
+# --- מנגנון ה-AI לחילוץ הנתונים (משודרג לאתרים מורכבים כמו Mako) ---
 def extract_recipe_data(url, category):
     try:
-        # הוספנו User-Agent מלא כדי שהאתר לא יחשוב שאנחנו בוט פשוט
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
-        res = requests.get(url, headers=headers, timeout=10)
-        
-        # שלב קריטי: הכרחת קידוד לעברית כדי למנוע ג'יבריש
-        res.encoding = 'utf-8' 
+        # הוספת כותרות כדי לדמות דפדפן אמיתי
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7"
+        }
+        res = requests.get(url, headers=headers, timeout=15)
+        res.encoding = 'utf-8'
         res.raise_for_status()
         
         soup = BeautifulSoup(res.text, 'html.parser')
         
+        # חילוץ כותרת ותמונה מתגיות המטא של האתר (עוקף חסימות טקסט)
+        meta_title = soup.find('meta', property='og:title')
+        meta_title = meta_title['content'] if meta_title else ""
+        
+        meta_image = soup.find('meta', property='og:image')
+        meta_image = meta_image['content'] if meta_image else ""
+        
         text_content = soup.get_text(separator='\n', strip=True)
         images = [img.get('src') for img in soup.find_all('img') if img.get('src') and img.get('src').startswith('http')]
-        images_list = "\n".join(images[:15])
         
-        # חילוץ מידע מובנה (Schema) אם קיים באתר (מאוד עוזר ל-AI באתרי מתכונים)
-        structured_data = []
-        for script in soup.find_all('script', type='application/ld+json'):
-            if script.string:
-                structured_data.append(script.string)
-        structured_text = "\n".join(structured_data)
+        if meta_image and meta_image not in images:
+            images.insert(0, meta_image)
+            
+        images_list = "\n".join(images[:15])
         
         genai.configure(api_key=st.secrets["AI_API_KEY"])
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
@@ -39,25 +67,29 @@ def extract_recipe_data(url, category):
             return None
             
         prompt = f'''
-        You are an advanced recipe data extractor. I will provide text and structured data from a recipe website, plus image URLs.
-        Extract the recipe details and return ONLY a valid JSON object. Do not use Markdown formatting, just the raw JSON.
-        If a field is missing, leave it as an empty string.
+        You are an advanced recipe data extractor. 
+        Extract the recipe details into a strictly valid JSON object.
         
         Required JSON structure:
         {{
             "Recipe_Name": "The exact name of the recipe in Hebrew",
             "Ingredients": "The list of ingredients in Hebrew, separated by a newline character (\\n)",
-            "Image_URL": "The best matching high-resolution image URL of the dish from the provided list"
+            "Image_URL": "The best matching high-resolution image URL"
         }}
         
-        Structured Data (Metadata):
-        {structured_text[:5000]}
+        Metadata Title (Extremely Important): {meta_title}
+        Metadata Image (Extremely Important): {meta_image}
         
         Website Text (partial):
         {text_content[:15000]}
         
         Potential Image URLs:
         {images_list}
+        
+        Instructions: 
+        1. Always use the Metadata Title for "Recipe_Name" if available.
+        2. Always use the Metadata Image for "Image_URL" if available.
+        3. If you cannot find ingredients in the Website Text, use your extensive culinary knowledge to estimate the ingredients based on the Metadata Title, but try to extract them from the text first.
         '''
         
         data = None
@@ -70,14 +102,17 @@ def extract_recipe_data(url, category):
                 response = model.generate_content(prompt)
                 res_text = response.text.strip()
                 
-                if res_text.startswith("```json"):
-                    res_text = res_text[7:-3].strip()
-                elif res_text.startswith("```"):
-                    res_text = res_text[3:-3].strip()
+                # שימוש ב-Regex כדי לתפוס את ה-JSON בוודאות גם אם המודל הוסיף טקסט מסביב
+                json_match = re.search(r'\{.*\}', res_text, re.DOTALL)
+                if json_match:
+                    res_text = json_match.group(0)
                     
                 data = json.loads(res_text)
-                break 
                 
+                # אם קיבלנו שם מתכון - החילוץ הצליח ויוצאים מהלולאה
+                if data.get("Recipe_Name"):
+                    break 
+                    
             except Exception:
                 continue
                 
@@ -87,9 +122,9 @@ def extract_recipe_data(url, category):
         st.error(f"שגיאה כללית בחילוץ: {e}")
         return None
 
+# --- ממשק המשתמש ---
 st.title("🍳 לוח המתכונים")
 
-conn = st.connection("gsheets", type=GSheetsConnection)
 tab_board, tab_add = st.tabs(["📋 לוח מתכונים", "➕ הוספת מתכון חדש"])
 
 with tab_add:
@@ -100,7 +135,7 @@ with tab_add:
         submit = st.form_submit_button("חלץ ושמור מתכון")
         
         if submit and url_input:
-            with st.spinner("מנתח את העמוד ומחלץ נתונים..."):
+            with st.spinner("מנתח את העמוד ומחלץ נתונים (זה עשוי לקחת כמה שניות)..."):
                 ai_data = extract_recipe_data(url_input, category_input)
                 
                 if ai_data:
@@ -129,7 +164,7 @@ with tab_add:
 with tab_board:
     st.header("המתכונים שלי")
     try:
-        # קריאת הנתונים ומילוי שדות ריקים בטקסט ריק כדי למנוע הופעה של 'nan'
+        # קריאת הנתונים ומילוי שדות ריקים כדי להימנע מ-nan
         df = conn.read(ttl=0).fillna("")
         
         if df.empty or len(df.columns) == 0:
@@ -151,7 +186,7 @@ with tab_board:
                             if img_url and img_url.startswith('http'):
                                 st.image(img_url, use_column_width=True)
                             
-                            # כותרת (עם גיבוי למקרה שאין שם)
+                            # כותרת
                             recipe_name = row.get('Recipe_Name', '')
                             st.markdown(f"**{recipe_name if recipe_name else 'מתכון ללא שם'}**")
                             
@@ -159,22 +194,14 @@ with tab_board:
                             with st.expander("מצרכים"):
                                 st.text(row.get('Ingredients', 'אין מצרכים זמינים'))
                             
-                            # כפתורי פעולה בשורה אחת
+                            # חלוקה לכפתור לינק וכפתור מחיקה
                             action_cols = st.columns([2, 1])
                             with action_cols[0]:
                                 st.markdown(f"[🔗 למתכון המלא]({row.get('Recipe_URL', '#')})")
                             with action_cols[1]:
-                                # כפתור מחיקה - משתמש באינדקס של השורה
                                 if st.button("🗑️", key=f"del_{index}", help="מחק מתכון זה"):
-                                    # קריאה מחדש של הנתונים כדי למנוע התנגשויות
-                                    fresh_df = conn.read(ttl=0)
-                                    # מחיקת השורה לפי האינדקס
-                                    fresh_df = fresh_df.drop(index)
-                                    # עדכון הגיליון
-                                    conn.update(data=fresh_df)
-                                    # ניקוי זיכרון מטמון ורענון העמוד
-                                    st.cache_data.clear()
-                                    st.rerun()
+                                    # קריאה לחלון הווידוא (Modal) שהגדרנו למעלה
+                                    confirm_delete(index)
                                     
     except Exception as e:
-        st.error(f"שגיאה בקריאת הנתונים: {e}")
+        st.error(f"שגיאה בקריאת הנתונים מ-Google Sheets: {e}")
