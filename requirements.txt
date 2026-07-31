@@ -1,0 +1,6 @@
+streamlit
+st-gsheets-connection
+pandas
+requests
+beautifulsoup4
+google-generativeai
