@@ -1,6 +1,7 @@
 streamlit
-st-gsheets-connection
 pandas
 requests
 beautifulsoup4
 google-generativeai
+st-gsheets-connection
+instaloader
