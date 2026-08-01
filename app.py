@@ -1,5 +1,7 @@
 import streamlit as st
 import pandas as pd
+import threading
+from streamlit.runtime.scriptrunner import add_script_run_ctx
 from streamlit_gsheets import GSheetsConnection
 from extractor import extract_recipe_data
 
@@ -11,7 +13,7 @@ st.markdown("""
     .stApp, .block-container { direction: rtl; text-align: right; }
     p, div, input, label, h1, h2, h3, h4, h5, h6, span { text-align: right; }
     .streamlit-expanderHeader { direction: rtl; font-size: 1.1rem; font-weight: bold; }
-    div[data-baseweb="input"] input, div[data-baseweb="select"] div { direction: rtl; text-align: right; }
+    div[data-baseweb="input"] input, div[data-baseweb="textarea"] textarea, div[data-baseweb="select"] div { direction: rtl; text-align: right; }
     div[data-baseweb="tab-list"] { justify-content: flex-start; direction: rtl; }
     div[role="dialog"] { direction: rtl; text-align: right; }
 </style>
@@ -35,6 +37,38 @@ def confirm_delete(index):
             st.cache_data.clear()
             st.rerun()
 
+# --- מנגנון ריצה ברקע (Fire and Forget) ---
+def process_recipe_background(url, category, notes, api_key):
+    try:
+        # חילוץ הנתונים מה-AI
+        ai_data = extract_recipe_data(url, category, api_key)
+        
+        if ai_data and "error" not in ai_data:
+            # פתיחת חיבור עצמאי למסד הנתונים מתוך ה-Thread
+            thread_conn = st.connection("gsheets", type=GSheetsConnection)
+            df = thread_conn.read(ttl=0)
+            
+            new_row = pd.DataFrame([{
+                "Category": category,
+                "Recipe_Name": ai_data.get("Recipe_Name", ""),
+                "Ingredients": ai_data.get("Ingredients", ""),
+                "Image_URL": ai_data.get("Image_URL", ""),
+                "Recipe_URL": url,
+                "Notes": notes  # השדה החדש שהוספנו
+            }])
+            
+            if df.empty or len(df.columns) == 0:
+                updated_df = new_row
+            else:
+                updated_df = pd.concat([df, new_row], ignore_index=True)
+            
+            # שמירה וניקוי קאש
+            thread_conn.update(data=updated_df)
+            st.cache_data.clear()
+            
+    except Exception as e:
+        print(f"Background task failed: {e}")
+
 st.title("🍳 לוח המתכונים")
 
 tab_board, tab_add = st.tabs(["📋 לוח מתכונים", "➕ הוספת מתכון חדש"])
@@ -46,37 +80,25 @@ with tab_add:
     with st.form("add_recipe"):
         url_input = st.text_input("הכנס לינק למתכון (אתר או אינסטגרם):")
         category_input = st.selectbox("קטגוריה:", categories_list)
-        submit = st.form_submit_button("חלץ ושמור מתכון")
+        # שדה חדש להערות אישיות
+        notes_input = st.text_area("הערות (אופציונלי):", placeholder="לדוגמה: להפחית חצי כוס סוכר, להשתמש בקמח כוסמין...")
+        
+        submit = st.form_submit_button("שלח לעיבוד")
         
         if submit and url_input:
-            with st.spinner("מנתח את הלינק ומחלץ נתונים (זה עשוי לקחת כמה שניות)..."):
-                api_key = st.secrets["AI_API_KEY"]
-                ai_data = extract_recipe_data(url_input, category_input, api_key)
-                
-                if ai_data:
-                    if "error" in ai_data:
-                        st.error(ai_data["error"])
-                    else:
-                        try:
-                            df = conn.read(ttl=0)
-                            new_row = pd.DataFrame([{
-                                "Category": category_input,
-                                "Recipe_Name": ai_data.get("Recipe_Name", ""),
-                                "Ingredients": ai_data.get("Ingredients", ""),
-                                "Image_URL": ai_data.get("Image_URL", ""),
-                                "Recipe_URL": url_input
-                            }])
-                            
-                            if df.empty or len(df.columns) == 0:
-                                updated_df = new_row
-                            else:
-                                updated_df = pd.concat([df, new_row], ignore_index=True)
-                            
-                            conn.update(data=updated_df)
-                            st.cache_data.clear()
-                            st.success(f"המתכון '{ai_data.get('Recipe_Name', '')}' נוסף בהצלחה!")
-                        except Exception as e:
-                            st.error(f"שגיאה בשמירה למסד הנתונים: {e}")
+            api_key = st.secrets["AI_API_KEY"]
+            
+            # במקום לחכות לפעולה, אנחנו פותחים Thread חדש
+            thread = threading.Thread(target=process_recipe_background, args=(url_input, category_input, notes_input, api_key))
+            
+            # קושרים את ה-Thread להקשר של Streamlit כדי שיהיו לו הרשאות לסודות (Secrets)
+            add_script_run_ctx(thread)
+            
+            # משגרים את העבודה לרקע
+            thread.start()
+            
+            # הודעת הצלחה מיידית שמאפשרת למשתמש לצאת מהאפליקציה
+            st.success("הבקשה נשלחה לעיבוד ברקע! 🚀 אפשר לסגור את האפליקציה, המתכון יתווסף ללוח בעוד מספר שניות.")
 
 # --- טאב לוח תצוגה ---
 with tab_board:
@@ -98,16 +120,25 @@ with tab_board:
                         col = cols[i % 4]
                         with col:
                             with st.container(border=True):
+                                # תמונה
                                 img_url = str(row.get('Image_URL', ''))
                                 if img_url and img_url.startswith('http'):
                                     st.image(img_url, use_column_width=True)
                                 
+                                # כותרת
                                 recipe_name = row.get('Recipe_Name', '')
                                 st.markdown(f"**{recipe_name if recipe_name else 'מתכון ללא שם'}**")
                                 
+                                # מצרכים (תמיד זמין)
                                 with st.expander("מצרכים"):
                                     st.text(row.get('Ingredients', 'אין מצרכים זמינים'))
                                 
+                                # הצגת ההערות רק אם קיימות כאלו
+                                notes = str(row.get('Notes', ''))
+                                if notes and notes != 'nan':
+                                    st.info(f"**הערות:** {notes}")
+                                
+                                # כפתורים
                                 action_cols = st.columns([1, 2])
                                 with action_cols[0]:
                                     if st.button("🗑️", key=f"del_{index}", help="מחק מתכון זה"):
