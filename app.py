@@ -8,7 +8,7 @@ from extractor import extract_recipe_data
 
 st.set_page_config(page_title="לוח מתכונים", page_icon="🍳", layout="wide")
 
-# אתחול מונה מתכונים ברקע (לזיכרון של האפליקציה הנוכחית)
+# אתחול מונה מתכונים ברקע 
 if 'pending_recipes' not in st.session_state:
     st.session_state.pending_recipes = 0
 
@@ -42,6 +42,14 @@ def confirm_delete(index):
             st.cache_data.clear()
             st.rerun()
 
+# --- חלון פופ-אפ לאישור הוספה ---
+@st.dialog("✅ הנתונים התקבלו!")
+def success_dialog():
+    st.write("המתכון נשלח לעיבוד ויתווסף ללוח ברקע בעוד מספר שניות.")
+    st.write("אפשר להוסיף מתכון נוסף או לצאת מהאפליקציה.")
+    if st.button("אישור", type="primary", use_container_width=True):
+        st.rerun()
+
 # --- מנגנון ריצה ברקע (Fire and Forget) ---
 def process_recipe_background(url, category, notes, api_key):
     try:
@@ -71,8 +79,6 @@ def process_recipe_background(url, category, notes, api_key):
     except Exception as e:
         print(f"Background task failed: {e}")
     finally:
-        # בסיום התהליך (גם אם נכשל וגם אם הצליח), מורידים 1 מהמונה.
-        # אנחנו עוטפים ב-try למקרה שהמשתמש כבר סגר את האפליקציה וה-session נמחק
         try:
             if st.session_state.pending_recipes > 0:
                 st.session_state.pending_recipes -= 1
@@ -88,7 +94,6 @@ categories_list = ["עוף", "בשר", "דגים", "תוספות", "מרק", "ס
 with tab_add:
     st.header("הזנת מתכון חדש")
     
-    # clear_on_submit=True אומר שברגע שלוחצים על הכפתור, השדות מתרוקנים
     with st.form("add_recipe", clear_on_submit=True):
         url_input = st.text_input("הכנס לינק למתכון (אתר או אינסטגרם):")
         category_input = st.selectbox("קטגוריה:", categories_list)
@@ -102,25 +107,21 @@ with tab_add:
             
             api_key = st.secrets["AI_API_KEY"]
             
-            # מוסיפים מתכון אחד למונה ההמתנה
             st.session_state.pending_recipes += 1
             
             thread = threading.Thread(target=process_recipe_background, args=(clean_url, category_input, notes_input, api_key))
             add_script_run_ctx(thread)
             thread.start()
             
-            # פופ-אפ קטן ויפה למטה
-            st.toast("🚀 הבקשה נשלחה לעיבוד! הטופס נוקה ומוכן למתכון הבא.")
-            # מרענן את העמוד כדי להראות את חיווי ה"שעון עצר"
-            st.rerun()
+            # קריאה לחלון הקופץ שמאשר את ההוספה
+            success_dialog()
 
 # --- טאב לוח תצוגה ---
 with tab_board:
     st.header("המתכונים שלי")
     
-    # אינדיקטור / "שעון עצר" שמופיע כל עוד יש מתכונים ברקע
     if st.session_state.pending_recipes > 0:
-        st.warning(f"⏳ {st.session_state.pending_recipes} מתכון/ים בתהליך הוספה כעת... (התהליך רץ ברקע, אפשר לצאת מהאפליקציה או להמתין)")
+        st.warning(f"⏳ {st.session_state.pending_recipes} מתכון/ים בתהליך הוספה כעת... (התהליך רץ ברקע)")
         if st.button("🔄 רענן את הלוח כדי לבדוק אם הסתיים", use_container_width=True):
             st.rerun()
             
@@ -142,9 +143,9 @@ with tab_board:
                         with col:
                             with st.container(border=True):
                                 img_url = str(row.get('Image_URL', ''))
+                                # הסרנו את ההגבלה! מעכשיו ינסה להציג כל תמונה, כולל אינסטגרם
                                 if img_url and img_url.startswith('http'):
-                                    if "scontent" not in img_url and "instagram" not in img_url:
-                                        st.image(img_url, use_container_width=True)
+                                    st.image(img_url, use_container_width=True)
                                 
                                 recipe_name = row.get('Recipe_Name', '')
                                 st.markdown(f"**{recipe_name if recipe_name else 'מתכון ללא שם'}**")
