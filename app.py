@@ -120,10 +120,10 @@ with tab_board:
                         col = cols[i % 4]
                         with col:
                             with st.container(border=True):
-                                # תמונה
+                                # תמונה - כאן בוצע התיקון!
                                 img_url = str(row.get('Image_URL', ''))
                                 if img_url and img_url.startswith('http'):
-                                    st.image(img_url, use_column_width=True)
+                                    st.image(img_url, use_container_width=True)
                                 
                                 # כותרת
                                 recipe_name = row.get('Recipe_Name', '')
