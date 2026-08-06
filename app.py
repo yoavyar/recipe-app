@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import threading
+import re
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 from streamlit_gsheets import GSheetsConnection
 from extractor import extract_recipe_data
@@ -40,11 +41,9 @@ def confirm_delete(index):
 # --- מנגנון ריצה ברקע (Fire and Forget) ---
 def process_recipe_background(url, category, notes, api_key):
     try:
-        # חילוץ הנתונים מה-AI
         ai_data = extract_recipe_data(url, category, api_key)
         
         if ai_data and "error" not in ai_data:
-            # פתיחת חיבור עצמאי למסד הנתונים מתוך ה-Thread
             thread_conn = st.connection("gsheets", type=GSheetsConnection)
             df = thread_conn.read(ttl=0)
             
@@ -54,7 +53,7 @@ def process_recipe_background(url, category, notes, api_key):
                 "Ingredients": ai_data.get("Ingredients", ""),
                 "Image_URL": ai_data.get("Image_URL", ""),
                 "Recipe_URL": url,
-                "Notes": notes  # השדה החדש שהוספנו
+                "Notes": notes
             }])
             
             if df.empty or len(df.columns) == 0:
@@ -62,7 +61,6 @@ def process_recipe_background(url, category, notes, api_key):
             else:
                 updated_df = pd.concat([df, new_row], ignore_index=True)
             
-            # שמירה וניקוי קאש
             thread_conn.update(data=updated_df)
             st.cache_data.clear()
             
@@ -80,24 +78,21 @@ with tab_add:
     with st.form("add_recipe"):
         url_input = st.text_input("הכנס לינק למתכון (אתר או אינסטגרם):")
         category_input = st.selectbox("קטגוריה:", categories_list)
-        # שדה חדש להערות אישיות
         notes_input = st.text_area("הערות (אופציונלי):", placeholder="לדוגמה: להפחית חצי כוס סוכר, להשתמש בקמח כוסמין...")
         
         submit = st.form_submit_button("שלח לעיבוד")
         
         if submit and url_input:
+            # ניקוי הלינק: מחלץ רק את הכתובת האמיתית ומתעלם מכל טקסט אחר שהודבק בטעות
+            url_match = re.search(r'(https?://[^\s]+)', url_input)
+            clean_url = url_match.group(1) if url_match else url_input.strip()
+            
             api_key = st.secrets["AI_API_KEY"]
             
-            # במקום לחכות לפעולה, אנחנו פותחים Thread חדש
-            thread = threading.Thread(target=process_recipe_background, args=(url_input, category_input, notes_input, api_key))
-            
-            # קושרים את ה-Thread להקשר של Streamlit כדי שיהיו לו הרשאות לסודות (Secrets)
+            thread = threading.Thread(target=process_recipe_background, args=(clean_url, category_input, notes_input, api_key))
             add_script_run_ctx(thread)
-            
-            # משגרים את העבודה לרקע
             thread.start()
             
-            # הודעת הצלחה מיידית שמאפשרת למשתמש לצאת מהאפליקציה
             st.success("הבקשה נשלחה לעיבוד ברקע! 🚀 אפשר לסגור את האפליקציה, המתכון יתווסף ללוח בעוד מספר שניות.")
 
 # --- טאב לוח תצוגה ---
@@ -120,31 +115,34 @@ with tab_board:
                         col = cols[i % 4]
                         with col:
                             with st.container(border=True):
-                                # תמונה - כאן בוצע התיקון!
+                                # טיפול בתמונות שבורות (חסימת Hotlink של אינסטגרם/פייסבוק)
                                 img_url = str(row.get('Image_URL', ''))
                                 if img_url and img_url.startswith('http'):
-                                    st.image(img_url, use_container_width=True)
+                                    # אם זו תמונה מאינסטגרם, אנחנו נדלג עליה כדי שלא תופיע כתמונה שבורה
+                                    if "scontent" not in img_url and "instagram" not in img_url:
+                                        st.image(img_url, use_container_width=True)
                                 
-                                # כותרת
                                 recipe_name = row.get('Recipe_Name', '')
                                 st.markdown(f"**{recipe_name if recipe_name else 'מתכון ללא שם'}**")
                                 
-                                # מצרכים (תמיד זמין)
                                 with st.expander("מצרכים"):
                                     st.text(row.get('Ingredients', 'אין מצרכים זמינים'))
                                 
-                                # הצגת ההערות רק אם קיימות כאלו
                                 notes = str(row.get('Notes', ''))
                                 if notes and notes != 'nan':
                                     st.info(f"**הערות:** {notes}")
                                 
-                                # כפתורים
+                                # ניקוי הלינק למקרה שנשמר בעבר לינק מלוכלך בטבלה (כמו במקרה שלך)
+                                recipe_url = str(row.get('Recipe_URL', '#'))
+                                display_url_match = re.search(r'(https?://[^\s]+)', recipe_url)
+                                display_url = display_url_match.group(1) if display_url_match else recipe_url
+                                
                                 action_cols = st.columns([1, 2])
                                 with action_cols[0]:
                                     if st.button("🗑️", key=f"del_{index}", help="מחק מתכון זה"):
                                         confirm_delete(index)
                                 with action_cols[1]:
-                                    st.markdown(f"[🔗 למתכון המלא]({row.get('Recipe_URL', '#')})")
+                                    st.markdown(f"[🔗 למתכון המלא]({display_url})")
                                     
     except Exception as e:
         st.error(f"שגיאה בקריאת הנתונים: {e}")
