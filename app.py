@@ -8,6 +8,10 @@ from extractor import extract_recipe_data
 
 st.set_page_config(page_title="לוח מתכונים", page_icon="🍳", layout="wide")
 
+# אתחול מונה מתכונים ברקע (לזיכרון של האפליקציה הנוכחית)
+if 'pending_recipes' not in st.session_state:
+    st.session_state.pending_recipes = 0
+
 # --- עיצוב מותאם לעברית (RTL) ---
 st.markdown("""
 <style>
@@ -66,6 +70,14 @@ def process_recipe_background(url, category, notes, api_key):
             
     except Exception as e:
         print(f"Background task failed: {e}")
+    finally:
+        # בסיום התהליך (גם אם נכשל וגם אם הצליח), מורידים 1 מהמונה.
+        # אנחנו עוטפים ב-try למקרה שהמשתמש כבר סגר את האפליקציה וה-session נמחק
+        try:
+            if st.session_state.pending_recipes > 0:
+                st.session_state.pending_recipes -= 1
+        except:
+            pass
 
 st.title("🍳 לוח המתכונים")
 
@@ -75,7 +87,9 @@ categories_list = ["עוף", "בשר", "דגים", "תוספות", "מרק", "ס
 # --- טאב הזנה ---
 with tab_add:
     st.header("הזנת מתכון חדש")
-    with st.form("add_recipe"):
+    
+    # clear_on_submit=True אומר שברגע שלוחצים על הכפתור, השדות מתרוקנים
+    with st.form("add_recipe", clear_on_submit=True):
         url_input = st.text_input("הכנס לינק למתכון (אתר או אינסטגרם):")
         category_input = st.selectbox("קטגוריה:", categories_list)
         notes_input = st.text_area("הערות (אופציונלי):", placeholder="לדוגמה: להפחית חצי כוס סוכר, להשתמש בקמח כוסמין...")
@@ -83,21 +97,33 @@ with tab_add:
         submit = st.form_submit_button("שלח לעיבוד")
         
         if submit and url_input:
-            # ניקוי הלינק: מחלץ רק את הכתובת האמיתית ומתעלם מכל טקסט אחר שהודבק בטעות
             url_match = re.search(r'(https?://[^\s]+)', url_input)
             clean_url = url_match.group(1) if url_match else url_input.strip()
             
             api_key = st.secrets["AI_API_KEY"]
             
+            # מוסיפים מתכון אחד למונה ההמתנה
+            st.session_state.pending_recipes += 1
+            
             thread = threading.Thread(target=process_recipe_background, args=(clean_url, category_input, notes_input, api_key))
             add_script_run_ctx(thread)
             thread.start()
             
-            st.success("הבקשה נשלחה לעיבוד ברקע! 🚀 אפשר לסגור את האפליקציה, המתכון יתווסף ללוח בעוד מספר שניות.")
+            # פופ-אפ קטן ויפה למטה
+            st.toast("🚀 הבקשה נשלחה לעיבוד! הטופס נוקה ומוכן למתכון הבא.")
+            # מרענן את העמוד כדי להראות את חיווי ה"שעון עצר"
+            st.rerun()
 
 # --- טאב לוח תצוגה ---
 with tab_board:
     st.header("המתכונים שלי")
+    
+    # אינדיקטור / "שעון עצר" שמופיע כל עוד יש מתכונים ברקע
+    if st.session_state.pending_recipes > 0:
+        st.warning(f"⏳ {st.session_state.pending_recipes} מתכון/ים בתהליך הוספה כעת... (התהליך רץ ברקע, אפשר לצאת מהאפליקציה או להמתין)")
+        if st.button("🔄 רענן את הלוח כדי לבדוק אם הסתיים", use_container_width=True):
+            st.rerun()
+            
     try:
         df = conn.read(ttl=0).fillna("")
         
@@ -115,10 +141,8 @@ with tab_board:
                         col = cols[i % 4]
                         with col:
                             with st.container(border=True):
-                                # טיפול בתמונות שבורות (חסימת Hotlink של אינסטגרם/פייסבוק)
                                 img_url = str(row.get('Image_URL', ''))
                                 if img_url and img_url.startswith('http'):
-                                    # אם זו תמונה מאינסטגרם, אנחנו נדלג עליה כדי שלא תופיע כתמונה שבורה
                                     if "scontent" not in img_url and "instagram" not in img_url:
                                         st.image(img_url, use_container_width=True)
                                 
@@ -132,7 +156,6 @@ with tab_board:
                                 if notes and notes != 'nan':
                                     st.info(f"**הערות:** {notes}")
                                 
-                                # ניקוי הלינק למקרה שנשמר בעבר לינק מלוכלך בטבלה (כמו במקרה שלך)
                                 recipe_url = str(row.get('Recipe_URL', '#'))
                                 display_url_match = re.search(r'(https?://[^\s]+)', recipe_url)
                                 display_url = display_url_match.group(1) if display_url_match else recipe_url
