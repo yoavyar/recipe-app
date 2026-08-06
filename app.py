@@ -8,7 +8,6 @@ from extractor import extract_recipe_data
 
 st.set_page_config(page_title="לוח מתכונים", page_icon="🍳", layout="wide")
 
-# אתחול מונה מתכונים ברקע 
 if 'pending_recipes' not in st.session_state:
     st.session_state.pending_recipes = 0
 
@@ -85,10 +84,24 @@ def process_recipe_background(url, category, notes, api_key):
         except:
             pass
 
+# --- יצירת רשימת קטגוריות חכמה ולומדת ---
+# המערכת קוראת את בסיס הנתונים ומוסיפה לתפריט כל קטגוריה חדשה שהזנת בעבר
+try:
+    temp_df = conn.read(ttl=0).fillna("")
+    if not temp_df.empty and 'Category' in temp_df.columns:
+        saved_categories = [c for c in temp_df['Category'].unique() if c != ""]
+    else:
+        saved_categories = []
+except Exception:
+    saved_categories = []
+
+base_categories = ["עוף", "בשר", "דגים", "תוספות", "מרק", "סלטים", "קינוחים"]
+# מיזוג הרשימות והסרת כפילויות, תוך שמירה על קטגוריות הבסיס ראשונות
+smart_categories_list = list(dict.fromkeys(base_categories + saved_categories))
+
 st.title("🍳 לוח המתכונים")
 
 tab_board, tab_add = st.tabs(["📋 לוח מתכונים", "➕ הוספת מתכון חדש"])
-categories_list = ["עוף", "בשר", "דגים", "תוספות", "מרק", "סלטים", "קינוחים"]
 
 # --- טאב הזנה ---
 with tab_add:
@@ -96,7 +109,11 @@ with tab_add:
     
     with st.form("add_recipe", clear_on_submit=True):
         url_input = st.text_input("הכנס לינק למתכון (אתר או אינסטגרם):")
-        category_input = st.selectbox("קטגוריה:", categories_list)
+        
+        # תפריט הבחירה + אפשרות להקלדה חופשית
+        category_dropdown = st.selectbox("בחר קטגוריה קיימת:", smart_categories_list)
+        new_category_input = st.text_input("או הזן קטגוריה חדשה:", placeholder="השאר ריק אם בחרת מהרשימה למעלה...")
+        
         notes_input = st.text_area("הערות (אופציונלי):", placeholder="לדוגמה: להפחית חצי כוס סוכר, להשתמש בקמח כוסמין...")
         
         submit = st.form_submit_button("שלח לעיבוד")
@@ -105,15 +122,17 @@ with tab_add:
             url_match = re.search(r'(https?://[^\s]+)', url_input)
             clean_url = url_match.group(1) if url_match else url_input.strip()
             
+            # אם הוקלד משהו בשדה החדש, הוא ידרוס את הבחירה מהתפריט
+            final_category = new_category_input.strip() if new_category_input.strip() else category_dropdown
+            
             api_key = st.secrets["AI_API_KEY"]
             
             st.session_state.pending_recipes += 1
             
-            thread = threading.Thread(target=process_recipe_background, args=(clean_url, category_input, notes_input, api_key))
+            thread = threading.Thread(target=process_recipe_background, args=(clean_url, final_category, notes_input, api_key))
             add_script_run_ctx(thread)
             thread.start()
             
-            # קריאה לחלון הקופץ שמאשר את ההוספה
             success_dialog()
 
 # --- טאב לוח תצוגה ---
@@ -143,7 +162,6 @@ with tab_board:
                         with col:
                             with st.container(border=True):
                                 img_url = str(row.get('Image_URL', ''))
-                                # הסרנו את ההגבלה! מעכשיו ינסה להציג כל תמונה, כולל אינסטגרם
                                 if img_url and img_url.startswith('http'):
                                     st.image(img_url, use_container_width=True)
                                 
